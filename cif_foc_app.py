@@ -1,3 +1,5 @@
+from decimal import Decimal, ROUND_FLOOR
+
 import pandas as pd
 import streamlit as st
 import matplotlib.pyplot as plt
@@ -23,9 +25,11 @@ total_freight = st.number_input(
 total_insurance = st.number_input(
     "Total Insurance Cost ($)",
     min_value=0.0,
-    value=150.0,
+    value=None,
     step=10.0,
-    help="Enter the total insurance cost for the entire shipment.",
+    format="%.2f",
+    placeholder="Leave blank to calculate",
+    help="Enter the total insurance cost, or leave blank to calculate it from CIF, FOC, and freight.",
 )
 
 st.subheader("2. Enter Product Data")
@@ -78,6 +82,12 @@ def clean_to_float(val):
     return 0.0
 
 
+def floor_to_cents(value):
+  return float(
+      Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_FLOOR)
+  )
+
+
 # Calculation Button
 if st.button("Calculate Costs", type="primary"):
   if edited_df.empty:
@@ -95,31 +105,56 @@ if st.button("Calculate Costs", type="primary"):
     total_cif = df["CIF of Product Line"].sum()
 
     if total_cif > 0:
-      # 2. Apportion Freight and Insurance proportionally based on CIF share
+      # 2. Apportion Freight proportionally based on CIF share
       df["Cost of Freight"] = (
           df["CIF of Product Line"] / total_cif
       ) * total_freight
-      df["Cost of Insurance"] = (
-          df["CIF of Product Line"] / total_cif
-      ) * total_insurance
     else:
       df["Cost of Freight"] = 0.0
-      df["Cost of Insurance"] = 0.0
 
-    # 3. FOC of product line = CIF - Freight - Insurance
-    df["FOC of Product Line"] = (
-        df["CIF of Product Line"] - df["Cost of Freight"] - df["Cost of Insurance"]
-    )
+    if total_insurance is None:
+      # Truncate per-unit FOC downward; insurance captures the discarded amount.
+      df["FOC/Unit"] = df.apply(
+          lambda row: (
+              floor_to_cents(
+                  row["Clean_CIF_Unit"]
+                  - row["Cost of Freight"] / row["Clean_Qty"],
+              )
+              if row["Clean_Qty"] > 0
+              else 0
+          ),
+          axis=1,
+      )
+      df["FOC of Product Line"] = (
+          df["FOC/Unit"] * df["Clean_Qty"]
+      ).round(2)
+      df["Cost of Insurance"] = (
+          df["CIF of Product Line"].round(2)
+          - df["Cost of Freight"].round(2)
+          - df["FOC of Product Line"]
+      )
+    else:
+      # 3. Apportion supplied insurance, then calculate FOC of product line.
+      if total_cif > 0:
+        df["Cost of Insurance"] = (
+            df["CIF of Product Line"] / total_cif
+        ) * total_insurance
+      else:
+        df["Cost of Insurance"] = 0.0
 
-    # 4. FOC/u = FOC of product line / Quantity
-    df["FOC/Unit"] = df.apply(
-        lambda row: (
-            row["FOC of Product Line"] / row["Clean_Qty"]
-            if row["Clean_Qty"] > 0
-            else 0
-        ),
-        axis=1,
-    )
+      df["FOC of Product Line"] = (
+          df["CIF of Product Line"] - df["Cost of Freight"] - df["Cost of Insurance"]
+      )
+
+      # 4. FOC/u = FOC of product line / Quantity
+      df["FOC/Unit"] = df.apply(
+          lambda row: (
+              row["FOC of Product Line"] / row["Clean_Qty"]
+              if row["Clean_Qty"] > 0
+              else 0
+          ),
+          axis=1,
+      )
 
     # Prepare final clean output DataFrame
     output_df = pd.DataFrame({
@@ -141,15 +176,21 @@ if st.button("Calculate Costs", type="primary"):
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Total Shipment CIF", f"${total_cif:,.2f}")
     col2.metric("Total Freight", f"${total_freight:,.2f}")
-    col3.metric("Total Insurance", f"${total_insurance:,.2f}")
+    total_calculated_insurance = output_df["Cost of Insurance"].sum()
+    col3.metric("Total Insurance", f"${total_calculated_insurance:,.2f}")
     col4.metric(
         "Total Shipment FOC", f"${output_df['FOC of Product Line'].sum():,.2f}"
     )
 
     total_foc = output_df["FOC of Product Line"].sum()
-    if total_cif > 0 and total_foc >= 0:
+    if (
+        total_cif > 0
+        and total_foc >= 0
+        and total_freight >= 0
+        and total_calculated_insurance >= 0
+    ):
         st.subheader("CIF Composition")
-        amounts = [total_foc, total_freight, total_insurance]
+        amounts = [total_foc, total_freight, total_calculated_insurance]
         labels = ["FOC", "Freight", "Insurance"]
         fig, (ax, legend_ax) = plt.subplots(
             1, 2, figsize=(5, 3), gridspec_kw={"width_ratios": [1, 1.4]}
@@ -172,7 +213,7 @@ if st.button("Calculate Costs", type="primary"):
     else:
         st.info(
             "A CIF composition pie chart is unavailable because the total CIF "
-            "must be positive and FOC must be non-negative."
+            "must be positive and FOC, freight, and insurance must be non-negative."
         )
 
     # Rounding for display
@@ -185,7 +226,9 @@ if st.button("Calculate Costs", type="primary"):
         "FOC of Product Line",
     ]
     display_df[cols_to_round_2] = display_df[cols_to_round_2].round(2)
-    display_df["FOC/Unit"] = display_df["FOC/Unit"].round(3)
+    display_df["FOC/Unit"] = display_df["FOC/Unit"].round(
+        2 if total_insurance is None else 3
+    )
 
     st.dataframe(display_df, width="stretch")
 
