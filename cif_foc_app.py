@@ -184,6 +184,13 @@ if st.button("Calculate Costs", type="primary"):
                 axis=1,
             )
 
+        # Exact Unrounded FOC for comparison
+        df["Exact FOC of Product Line"] = (
+            df["CIF of Product Line"]
+            - df["Cost of Freight"]
+            - df["Cost of Insurance"]
+        )
+
         # Final Output Table
         output_df = pd.DataFrame(
             {
@@ -194,7 +201,8 @@ if st.button("Calculate Costs", type="primary"):
                 "CIF of Product Line": df["CIF of Product Line"],
                 "Cost of Freight": df["Cost of Freight"],
                 "Cost of Insurance": df["Cost of Insurance"],
-                "FOC of Product Line": df["FOC of Product Line"],
+                "Exact FOC of Product Line": df["Exact FOC of Product Line"],
+                "Calculated FOC of Product Line": df["FOC of Product Line"],
                 "FOC/Unit": df["FOC/Unit"],
             }
         )
@@ -206,11 +214,14 @@ if st.button("Calculate Costs", type="primary"):
         total_calculated_insurance = output_df[
             "Cost of Insurance"
         ].sum()
+        total_exact_foc = output_df["Exact FOC of Product Line"].sum()
+        total_calculated_foc = output_df["Calculated FOC of Product Line"].sum()
+        foc_difference = total_calculated_foc - total_exact_foc
 
-        col1, col2, col3, col4 = st.columns(4)
+        col1, col2, col3, col4, col5 = st.columns(5)
 
         col1.metric(
-            "Total Shipment CIF (Discounted)",
+            "Total CIF",
             f"${total_cif:,.2f}",
         )
 
@@ -225,28 +236,33 @@ if st.button("Calculate Costs", type="primary"):
         )
 
         col4.metric(
-            "Total Shipment FOC",
-            f"${output_df['FOC of Product Line'].sum():,.2f}",
+            "Total Calculated FOC",
+            f"${total_calculated_foc:,.2f}",
         )
 
-        total_foc = output_df["FOC of Product Line"].sum()
+        col5.metric(
+            "Exact vs Calculated FOC",
+            f"${total_exact_foc:,.2f}",
+            delta=f"${foc_difference:,.2f} variance",
+            delta_color="off",
+        )
 
         if (
             total_cif > 0
-            and total_foc >= 0
+            and total_calculated_foc >= 0
             and total_freight >= 0
             and total_calculated_insurance >= 0
         ):
             st.subheader("CIF Composition")
 
             amounts = [
-                total_foc,
+                total_calculated_foc,
                 total_freight,
                 total_calculated_insurance,
             ]
 
             labels = [
-                "FOC",
+                "Calculated FOC",
                 "Freight",
                 "Insurance",
             ]
@@ -297,7 +313,8 @@ if st.button("Calculate Costs", type="primary"):
             "CIF of Product Line",
             "Cost of Freight",
             "Cost of Insurance",
-            "FOC of Product Line",
+            "Exact FOC of Product Line",
+            "Calculated FOC of Product Line",
             "FOC/Unit",
         ]
 
