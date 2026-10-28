@@ -33,14 +33,14 @@ total_insurance = st.number_input(
     help="Enter the total insurance cost, or leave blank to calculate it from CIF, FOC, and freight.",
 )
 
-# Global discount applied to all products
-foc_discount_pct = st.number_input(
-    "FOC Discount (%)",
+# Global discount applied to CIF/Unit price
+cif_discount_pct = st.number_input(
+    "CIF Discount (%)",
     min_value=0.0,
     max_value=100.0,
     value=0.0,
     step=0.1,
-    help="Discount applied to the calculated FOC/Unit for all products.",
+    help="Discount applied to the CIF/Unit for all products.",
 )
 
 st.subheader("2. Enter Product Data")
@@ -113,16 +113,21 @@ if st.button("Calculate Costs", type="primary"):
 
         # Clean numeric inputs
         df["Clean_Qty"] = df["Quantity"].apply(clean_to_float)
-        df["Clean_CIF_Unit"] = df["CIF/Unit ($)"].apply(clean_to_float)
+        df["Original CIF/Unit ($)"] = df["CIF/Unit ($)"].apply(clean_to_float)
 
-        # CIF Product Line
-        df["CIF of Product Line"] = (
-            df["Clean_Qty"] * df["Clean_CIF_Unit"]
+        # 1. Apply discount to CIF/Unit first
+        discount_factor = 1 - (cif_discount_pct / 100)
+        df["Discounted CIF/Unit ($)"] = (
+            df["Original CIF/Unit ($)"] * discount_factor
         )
 
+        # 2. Calculate Discounted CIF Product Line using the discounted unit price
+        df["CIF of Product Line"] = (
+            df["Clean_Qty"] * df["Discounted CIF/Unit ($)"]
+        )
         total_cif = df["CIF of Product Line"].sum()
 
-        # Freight allocation
+        # 3. Freight allocation based on discounted CIF share
         if total_cif > 0:
             df["Cost of Freight"] = (
                 df["CIF of Product Line"] / total_cif
@@ -130,13 +135,13 @@ if st.button("Calculate Costs", type="primary"):
         else:
             df["Cost of Freight"] = 0.0
 
-        # Insurance handling
+        # 4. Insurance handling
         if total_insurance is None:
 
             df["FOC/Unit"] = df.apply(
                 lambda row: (
                     floor_to_cents(
-                        row["Clean_CIF_Unit"]
+                        row["Discounted CIF/Unit ($)"]
                         - row["Cost of Freight"] / row["Clean_Qty"]
                     )
                     if row["Clean_Qty"] > 0
@@ -179,35 +184,18 @@ if st.button("Calculate Costs", type="primary"):
                 axis=1,
             )
 
-        # Apply global FOC discount
-        discount_factor = 1 - (foc_discount_pct / 100)
-
-        df["Discounted FOC/Unit"] = (
-            df["FOC/Unit"] * discount_factor
-        )
-
-        df["Discounted FOC of Product Line"] = (
-            df["Discounted FOC/Unit"] * df["Clean_Qty"]
-        )
-
         # Final Output Table
         output_df = pd.DataFrame(
             {
                 "Product Name": df["Product Name"],
                 "Quantity": df["Clean_Qty"],
-                "Original CIF/Unit ($)": df["Clean_CIF_Unit"],
-                "Discounted CIF/Unit ($)": df["Discounted FOC/Unit"],
+                "Original CIF/Unit ($)": df["Original CIF/Unit ($)"],
+                "Discounted CIF/Unit ($)": df["Discounted CIF/Unit ($)"],
                 "CIF of Product Line": df["CIF of Product Line"],
                 "Cost of Freight": df["Cost of Freight"],
                 "Cost of Insurance": df["Cost of Insurance"],
-                "Original FOC of Product Line": df[
-                    "FOC of Product Line"
-                ],
-                "Discounted FOC of Product Line": df[
-                    "Discounted FOC of Product Line"
-                ],
-                "Original FOC/Unit": df["FOC/Unit"],
-                "Discounted FOC/Unit": df["Discounted FOC/Unit"],
+                "FOC of Product Line": df["FOC of Product Line"],
+                "FOC/Unit": df["FOC/Unit"],
             }
         )
 
@@ -222,7 +210,7 @@ if st.button("Calculate Costs", type="primary"):
         col1, col2, col3, col4 = st.columns(4)
 
         col1.metric(
-            "Total Shipment CIF",
+            "Total Shipment CIF (Discounted)",
             f"${total_cif:,.2f}",
         )
 
@@ -237,13 +225,11 @@ if st.button("Calculate Costs", type="primary"):
         )
 
         col4.metric(
-            "Total Shipment FOC (Discounted)",
-            f"${output_df['Discounted FOC of Product Line'].sum():,.2f}",
+            "Total Shipment FOC",
+            f"${output_df['FOC of Product Line'].sum():,.2f}",
         )
 
-        total_foc = output_df[
-            "Discounted FOC of Product Line"
-        ].sum()
+        total_foc = output_df["FOC of Product Line"].sum()
 
         if (
             total_cif > 0
@@ -260,7 +246,7 @@ if st.button("Calculate Costs", type="primary"):
             ]
 
             labels = [
-                "Discounted FOC",
+                "FOC",
                 "Freight",
                 "Insurance",
             ]
@@ -311,15 +297,12 @@ if st.button("Calculate Costs", type="primary"):
             "CIF of Product Line",
             "Cost of Freight",
             "Cost of Insurance",
-            "Original FOC of Product Line",
-            "Discounted FOC of Product Line",
-            "Original FOC/Unit",
-            "Discounted FOC/Unit",
+            "FOC of Product Line",
+            "FOC/Unit",
         ]
 
-        display_df[cols_to_round] = display_df[cols_to_round].round(
-            2
-        )
+        display_df[cols_to_round] = display_df[cols_to_round].round(2)
+        display_df["FOC/Unit"] = display_df["FOC/Unit"].round(3)
 
         st.dataframe(display_df, width="stretch")
 
